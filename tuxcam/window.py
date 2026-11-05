@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import v4l2
+from . import v4l2, __version__
 from .engine import CameraEngine, list_devices
 
 ORG = "Tuxcam"
@@ -127,7 +127,7 @@ class VideoView(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Tuxcam")
+        self.setWindowTitle(f"Tuxcam {__version__}")
         self.resize(1100, 720)
         self.settings = QSettings(ORG, APP)
         self.engine = CameraEngine(self)
