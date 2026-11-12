@@ -1,7 +1,8 @@
 # Tuxcam — agent notes
 
-Webcam viewer/recorder for Linux, aimed at filming return/unboxing
-inspections. PySide6 UI + GStreamer backend via `python3-gi`.
+Webcam viewer/recorder for Linux + Windows, aimed at filming
+return/unboxing inspections. PySide6 UI + GStreamer backend via
+`python3-gi`.
 
 ## Run
 
@@ -88,3 +89,41 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tuxcam.py   # headless testing
 - `.venv/`, `__pycache__/`, `*.pyc` are gitignored. `.libs/` is
   intentionally not ignored (needed to launch on machines without
   `libxcb-cursor0`; safe to delete where it's installed).
+
+## Windows port (done)
+
+- Stack: MSYS2 UCRT64 at `C:\msys64` — python, `python-gobject`,
+  `python-comtypes`, `pyside6`, `gstreamer` + all plugin sets,
+  `pyinstaller`, `ntldd` come from pacman. `pip install` into ucrt64
+  python is blocked (PEP 668) and PyPI wheels won't match anyway
+  (`mingw_x86_64_ucrt_gnu` platform tag ≠ `win_amd64`) — use pacman.
+  `tuxcam.bat` launches `ucrt64\bin\python.exe tuxcam.py`.
+- `tuxcam/backend.py` — all platform seams: `GstDevice.create_element()`
+  produces the configured source element for both OSes (no per-platform
+  property names needed). `controls` re-exports v4l2.py or
+  win_controls.py.
+- `Gst.DeviceMonitor` providers enumerate **asynchronously** —
+  `get_devices()` right after `start()` misses devices; we sleep 0.8s.
+  Windows props: video uses `device.path`, wasapi2 audio uses `device.id`.
+- Windows dedupe: ks/mf/dshow providers can each report one camera —
+  `device_key()` collapses on the PnP instance id; `device_priority()`
+  prefers ksvideosrc > mfvideosrc > dshowvideosrc. On the Surface box
+  only mf reports the cam.
+- `tuxcam/win_controls.py` — DirectShow via comtypes: binds the camera
+  moniker a second time and talks `IAMVideoProcAmp`/`IAMCameraControl`;
+  works mid-stream. Ctrl ids encode iface/prop/auto; real flag bits are
+  detected per-property from GetRange caps (drivers disagree on
+  0x10/0x20 vs 0x1/0x2). `ctypes.COMError` is NOT an OSError subclass.
+- filesink `location` is set via `set_property` after parse_launch —
+  embedding a `C:\...` path in the launch string eats backslashes.
+- AAC encoder fallback chain: `avenc_aac` → `fdkaacenc` → `voaacenc`
+  (fdk-aac isn't in Ubuntu repos, so avenc stays first for Linux).
+- `packaging/build_windows.sh` → PyInstaller onefile `dist/Tuxcam.exe`
+  (~110 MB). The builtin `gi.repository.Gst` hook collects
+  plugins/typelibs/deps itself — do NOT also bundle bin/ or lib/
+  manually (duplicate glib copies → type-registration crash on start).
+  gstlibav is excluded via hooksconfig (avfilter pulls ggml/llama
+  DLLs that abort on load). `USERPROFILE` must be exported under msys2
+  bash or pathlib.Path.home() dies inside PyInstaller.
+- Verified on Surface Camera Front: enumerate, 720p preview, mp4 record
+  (h264+aac), controls panel (brightness…exposure via DirectShow).

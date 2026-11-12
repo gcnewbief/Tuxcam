@@ -17,6 +17,9 @@ def _find_icon():
     for cand in (
         os.path.join(here, "packaging", "tuxcam.png"),   # dev checkout
         os.path.join(here, "..", "..", "tuxcam.png"),    # AppImage root
+        os.path.join(
+            getattr(sys, "_MEIPASS", here), "tuxcam.png"
+        ),                                                # PyInstaller
     ):
         if os.path.exists(cand):
             return cand

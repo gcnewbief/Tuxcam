@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import subprocess
 
 from PySide6.QtCore import Qt, QSettings, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QKeySequence, QPainter, QColor, QPen, QFont, QShortcut
@@ -28,33 +27,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import v4l2, __version__
+from . import __version__
+from .backend import controls, list_audio_sources
 from .engine import CameraEngine, list_devices
 
 ORG = "Tuxcam"
 APP = "Tuxcam"
-
-
-def list_audio_sources():
-    """Return [(source_name, label)] from pactl, plus Default/None."""
-    out = [("default", "Default microphone")]
-    try:
-        r = subprocess.run(
-            ["pactl", "list", "sources"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        for block in r.stdout.split("Source #")[1:]:
-            name = re.search(r"^\s*Name:\s*(\S+)", block, re.M)
-            desc = re.search(r"^\s*Description:\s*(.+)", block, re.M)
-            if name:
-                label = desc.group(1).strip() if desc else name.group(1)
-                out.append((name.group(1), label))
-    except Exception:
-        pass
-    out.insert(0, (None, "No audio"))
-    return out
 
 
 class VideoView(QWidget):
@@ -497,7 +475,7 @@ class MainWindow(QMainWindow):
         return "".join(w for w in words if w not in ("auto", "automatic"))
 
     def _hw_set(self, path, ctrl, value):
-        if v4l2.set_ctrl(path, ctrl.id, int(value)):
+        if controls.set_ctrl(path, ctrl.id, int(value)):
             self.settings.setValue(f"hw/{path}/{ctrl.name}", int(value))
 
     def _build_controls(self, path):
@@ -510,7 +488,7 @@ class MainWindow(QMainWindow):
             t.stop()
             t.deleteLater()
         self._hw_timers = {}
-        ctrls = v4l2.list_controls(path)
+        ctrls = controls.list_controls(path)
         self.cam_btn.setVisible(bool(ctrls))
         if not ctrls:
             self.ctrls_frame.setVisible(False)
@@ -518,7 +496,7 @@ class MainWindow(QMainWindow):
 
         def get(c):
             try:
-                return v4l2.get_ctrl(path, c.id)
+                return controls.get_ctrl(path, c.id)
             except OSError:
                 return c.default
 
@@ -531,7 +509,7 @@ class MainWindow(QMainWindow):
                 except (TypeError, ValueError):
                     want = cur
                 if want != cur and c.minimum <= want <= c.maximum:
-                    if v4l2.set_ctrl(path, c.id, want):
+                    if controls.set_ctrl(path, c.id, want):
                         return want
             return cur
 
@@ -546,14 +524,14 @@ class MainWindow(QMainWindow):
                 continue
             cur = current(c)
             self.ctrls_layout.addWidget(QLabel(c.name), row, 0)
-            if c.type == v4l2.T_BOOL:
+            if c.type == controls.T_BOOL:
                 w = QCheckBox()
                 w.setChecked(bool(cur))
                 w.toggled.connect(
                     lambda on, c=c: self._hw_set(path, c, on)
                 )
                 self.ctrls_layout.addWidget(w, row, 1, 1, 2)
-            elif c.type in (v4l2.T_MENU, v4l2.T_INT_MENU):
+            elif c.type in (controls.T_MENU, controls.T_INT_MENU):
                 w = QComboBox()
                 for idx, label in sorted(c.menu.items()):
                     w.addItem(label, idx)
@@ -563,7 +541,7 @@ class MainWindow(QMainWindow):
                     lambda i, w=w, c=c: self._hw_set(path, c, w.itemData(i))
                 )
                 self.ctrls_layout.addWidget(w, row, 1, 1, 2)
-            elif c.type == v4l2.T_BUTTON:
+            elif c.type == controls.T_BUTTON:
                 w = QPushButton("Trigger")
                 w.clicked.connect(lambda _=None, c=c: self._hw_set(path, c, 1))
                 self.ctrls_layout.addWidget(w, row, 1, 1, 2)
@@ -607,7 +585,7 @@ class MainWindow(QMainWindow):
             ]
             if not deps:
                 continue
-            if c.type == v4l2.T_BOOL:
+            if c.type == controls.T_BOOL:
                 state = lambda w=w: w.isChecked()
                 w.toggled.connect(lambda *_a, s=state, d=deps: self._hw_deps(s, d))
             else:

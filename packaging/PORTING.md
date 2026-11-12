@@ -1,5 +1,11 @@
 # Porting Tuxcam to Windows — brief for the next session
 
+> **DONE** (2026-11-12). The port is implemented and verified on a
+> Surface webcam (enumerate / preview / mp4+aac record / DirectShow
+> controls panel / `dist\Tuxcam.exe` build). This file is kept as
+> background reading; see AGENTS.md "Windows port (done)" for the
+> quirks actually encountered. Original brief follows.
+
 Context: Tuxcam is PySide6 + GStreamer (python3-gi). ~80% of the code is
 already platform-neutral; the work is four platform seams + packaging.
 Target: `Tuxcam.exe` via PyInstaller.

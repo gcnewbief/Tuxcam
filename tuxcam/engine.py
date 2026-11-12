@@ -31,6 +31,8 @@ from gi.repository import Gst, GLib
 from PySide6.QtCore import QObject, Signal, QTimer, QEventLoop
 from PySide6.QtGui import QImage
 
+from . import backend
+
 Gst.init(None)
 
 FPS_CANDIDATES = (60, 50, 30, 25, 24, 20, 15, 10, 5)
@@ -72,6 +74,7 @@ class Device:
     name: str
     path: str
     modes: list
+    gst_device: object = None
 
     @property
     def label(self) -> str:
@@ -106,21 +109,22 @@ def _int_field(st, name):
 
 
 def list_devices() -> list:
-    """Enumerate V4L2 capture devices and their supported modes."""
+    """Enumerate video capture devices and their supported modes.
+
+    On Windows the ks/mf/dshow providers each report the same physical
+    camera, so results are deduped by PnP instance id (best provider wins).
+    """
     mon = Gst.DeviceMonitor()
     mon.start()
+    if backend.WINDOWS:
+        # providers probe asynchronously — give them a moment to populate
+        time.sleep(0.8)
     devs = []
+    seen = {}  # backend.device_key -> index into devs
     for d in mon.get_devices():
         if not d.has_classes("Video/Source"):
             continue
-        props = d.get_properties()
-        path = None
-        for key in ("device.path", "api.v4l2.path", "object.path"):
-            if props and props.has_field(key):
-                path = props.get_string(key)
-                if path and ":" in path and not path.startswith("/"):
-                    path = path.split(":", 1)[1]
-                break
+        path = backend.device_path(d)
         caps = d.get_caps()
         modes = set()
         if caps:
@@ -139,13 +143,22 @@ def list_devices() -> list:
                     modes.add(Mode(w, h, n, dn, name))
         if not path or not modes:
             continue
-        devs.append(
-            Device(
-                name=d.get_display_name(),
-                path=path,
-                modes=sorted(modes, key=lambda m: (-m.width * m.height, -m.fps)),
-            )
+        dev = Device(
+            name=d.get_display_name(),
+            path=path,
+            modes=sorted(modes, key=lambda m: (-m.width * m.height, -m.fps)),
+            gst_device=d,
         )
+        key = backend.device_key(d, path)
+        if key in seen:
+            # a better provider for the same physical device wins
+            if backend.device_priority(d) < backend.device_priority(
+                devs[seen[key]].gst_device
+            ):
+                devs[seen[key]] = dev
+            continue
+        seen[key] = len(devs)
+        devs.append(dev)
     mon.stop()
     return devs
 
@@ -219,8 +232,10 @@ class CameraEngine(QObject):
             )
         else:
             scale = "videoscale ! "
+        # The source element is not in this string — it is created per
+        # platform by the backend and linked onto the "capf" capsfilter.
         desc = (
-            f'v4l2src device="{device.path}" name=src ! {mode.caps} ! {decoder}'
+            f"capsfilter name=capf ! {decoder}"
             "videoconvert ! "
             "videocrop name=crop ! "
             f"{scale}"
@@ -240,7 +255,7 @@ class CameraEngine(QObject):
         )
         if audio_device is not None:
             desc += (
-                " pulsesrc name=asrc ! audioconvert ! audioresample ! "
+                " audioconvert name=aud_in ! audioresample ! "
                 "tee name=atee allow-not-linked=true "
                 "atee. ! queue leaky=downstream max-size-buffers=10 ! "
                 "audioconvert ! audioresample ! "
@@ -258,10 +273,28 @@ class CameraEngine(QObject):
             self.error.emit(f"Could not build pipeline: {e}")
             return False
 
-        if audio_device not in (None, "default"):
-            asrc = self.pipeline.get_by_name("asrc")
-            if asrc:
-                asrc.set_property("device", audio_device)
+        capf = self.pipeline.get_by_name("capf")
+        capf.set_property("caps", Gst.Caps.from_string(mode.caps))
+        self._src = backend.create_video_source(device)
+        if self._src is None or not (
+            self.pipeline.add(self._src) and self._src.link(capf)
+        ):
+            self.error.emit(f"Could not open camera source for {device.name}")
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
+            self._src = None
+            return False
+
+        self._asrc = None
+        if audio_device is not None:
+            ahead = self.pipeline.get_by_name("aud_in")
+            asrc = backend.create_audio_source(audio_device)
+            if asrc and self.pipeline.add(asrc) and asrc.link(ahead):
+                self._asrc = asrc
+            else:
+                if asrc:
+                    self.pipeline.remove(asrc)
+                self.error.emit("warning: could not open the audio source")
 
         self._ts = self.pipeline.get_by_name("ts")
         self._meta = self.pipeline.get_by_name("meta")
@@ -300,6 +333,7 @@ class CameraEngine(QObject):
             self.pipeline.get_state(2 * Gst.SECOND)
             self.pipeline = None
             # drop element refs so GC never disposes a PLAYING element
+            self._src = self._asrc = None
             self._appsink = self._rvsink = self._rasink = None
             self._ts = self._meta = self._crop = self._balance = None
             self._vtee = self._atee = None
@@ -387,7 +421,16 @@ class CameraEngine(QObject):
         if self._rec or not self.pipeline:
             return
         mux_name = "mp4mux" if container == "mp4" else "matroskamux"
-        with_audio = self.audio_device is not None and self._atee is not None
+        aac = next(
+            (e for e in ("avenc_aac", "fdkaacenc", "voaacenc")
+             if Gst.ElementFactory.find(e)),
+            None,
+        )
+        with_audio = (
+            self.audio_device is not None
+            and self._atee is not None
+            and aac is not None
+        )
         kbps = _bitrate_kbps(self.mode)
 
         # Separate encoder pipeline fed via appsrc — avoids fragile dynamic
@@ -402,17 +445,21 @@ class CameraEngine(QObject):
             desc += (
                 "appsrc name=aasrc is-live=true format=time do-timestamp=true "
                 "block=false ! audioconvert ! audioresample ! "
-                "avenc_aac bitrate=192000 ! aacparse ! rmux. "
+                f"{aac} bitrate=192000 ! aacparse ! rmux. "
             )
+        # filesink location is set as a property after parsing — embedding
+        # the path in the launch string breaks on Windows backslashes and
+        # on any platform when the directory contains spaces.
         if container == "mp4":
-            desc += f'mp4mux name=rmux faststart=true ! filesink location="{path}"'
+            desc += 'mp4mux name=rmux faststart=true ! filesink name=fsink'
         else:
-            desc += f'matroskamux name=rmux writing-app="Tuxcam" ! filesink location="{path}"'
+            desc += 'matroskamux name=rmux writing-app="Tuxcam" ! filesink name=fsink'
         try:
             rp = Gst.parse_launch(desc)
         except GLib.Error as e:
             self.error.emit(f"Could not build recorder: {e}")
             return
+        rp.get_by_name("fsink").set_property("location", path)
 
         self._rvsink = self.pipeline.get_by_name("rvsink")
         vasrc = rp.get_by_name("vasrc")

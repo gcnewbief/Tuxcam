@@ -10,7 +10,21 @@ from __future__ import annotations
 import fcntl
 import os
 import struct
-from dataclasses import dataclass, field
+
+from .ctrls import (  # noqa: F401  (re-exported for callers)
+    Ctrl,
+    FLAG_DISABLED,
+    FLAG_READ_ONLY,
+    FLAG_WRITE_ONLY,
+    FLAG_GRABBED,
+    NEXT_CTRL,
+    T_INT,
+    T_BOOL,
+    T_MENU,
+    T_BUTTON,
+    T_CLASS,
+    T_INT_MENU,
+)
 
 
 def _ioc(d, t, n, s):
@@ -29,37 +43,6 @@ _QUERYMENU = _iowr("V", 37, "II32sI")
 # struct v4l2_control { u32 id; s32 value; }
 _G_CTRL = _iowr("V", 27, "Ii")
 _S_CTRL = _iowr("V", 28, "Ii")
-
-NEXT_CTRL = 0x80000000
-FLAG_DISABLED = 0x0002
-FLAG_READ_ONLY = 0x0004
-FLAG_WRITE_ONLY = 0x0008
-FLAG_GRABBED = 0x0800
-
-T_INT = 1
-T_BOOL = 2
-T_MENU = 3
-T_BUTTON = 4
-T_CLASS = 6
-T_INT_MENU = 9
-
-
-@dataclass(eq=False)
-class Ctrl:
-    id: int
-    type: int
-    name: str
-    minimum: int
-    maximum: int
-    step: int
-    default: int
-    flags: int
-    menu: dict = field(default_factory=dict)  # index -> label
-
-    @property
-    def is_class(self) -> bool:
-        return self.type == T_CLASS
-
 
 def _cstr(b: bytes) -> str:
     return b.split(b"\0", 1)[0].decode("utf-8", "replace")
