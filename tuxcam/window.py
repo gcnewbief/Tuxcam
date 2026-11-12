@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QProgressBar,
     QPushButton,
@@ -205,6 +206,28 @@ class MainWindow(QMainWindow):
         root.addWidget(self.ctrls_frame)
         self._hw_timers = {}   # ctrl id -> QTimer debounce for slider ioctls
 
+        # ---- name/order label panel --------------------------------------
+        self.label_frame = QFrame()
+        self.label_frame.setFrameShape(QFrame.StyledPanel)
+        lf = QHBoxLayout(self.label_frame)
+        lf.setContentsMargins(8, 4, 8, 4)
+        self.label_chk = QCheckBox("Show on video")
+        lf.addWidget(self.label_chk)
+        lf.addSpacing(12)
+        lf.addWidget(QLabel("Name:"))
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("e.g. J. Smith")
+        self.name_edit.setMaximumWidth(220)
+        lf.addWidget(self.name_edit)
+        lf.addWidget(QLabel("Order #:"))
+        self.order_edit = QLineEdit()
+        self.order_edit.setPlaceholderText("e.g. 12345-A")
+        self.order_edit.setMaximumWidth(160)
+        lf.addWidget(self.order_edit)
+        lf.addStretch(1)
+        self.label_frame.setVisible(False)
+        root.addWidget(self.label_frame)
+
         # ---- bottom bar --------------------------------------------------
         bottom = QHBoxLayout()
         self.rec_btn = QPushButton("●  Record")
@@ -226,6 +249,10 @@ class MainWindow(QMainWindow):
         self.cam_btn.setCheckable(True)
         self.cam_btn.setMinimumHeight(40)
         bottom.addWidget(self.cam_btn)
+        self.label_btn = QPushButton("Label")
+        self.label_btn.setCheckable(True)
+        self.label_btn.setMinimumHeight(40)
+        bottom.addWidget(self.label_btn)
         line = QFrame()
         line.setFrameShape(QFrame.VLine)
         bottom.addWidget(line)
@@ -293,6 +320,10 @@ class MainWindow(QMainWindow):
         self.full_btn.clicked.connect(self._toggle_fullscreen)
         self.adj_btn.toggled.connect(self.adjust_frame.setVisible)
         self.cam_btn.toggled.connect(self.ctrls_frame.setVisible)
+        self.label_btn.toggled.connect(self.label_frame.setVisible)
+        self.label_chk.toggled.connect(self._update_label)
+        self.name_edit.textEdited.connect(self._update_label)
+        self.order_edit.textEdited.connect(self._update_label)
         self.ts_chk.toggled.connect(self.engine.set_timestamp)
         self.ts_chk.toggled.connect(self._save_ui_settings)
         self.zoom.valueChanged.connect(self._zoom_changed)
@@ -439,12 +470,21 @@ class MainWindow(QMainWindow):
         if self.engine.start(d, m, audio):
             self.status_label.setText(f"{d.path} — {m.label}")
         self._build_controls(d.path)
+        self._update_label()
         # re-apply persistent controls to the fresh pipeline
         self.engine.set_zoom(self.zoom.value() / 100.0)
         self.engine.set_balance("brightness", self.bright.value() / 100.0)
         self.engine.set_balance("contrast", self.contrast.value() / 100.0)
         self.engine.set_balance("saturation", self.sat.value() / 100.0)
         self.engine.set_timestamp(self.ts_chk.isChecked())
+        self._save_ui_settings()
+
+    def _update_label(self, *_args):
+        self.engine.set_label(
+            self.name_edit.text(),
+            self.order_edit.text(),
+            self.label_chk.isChecked(),
+        )
         self._save_ui_settings()
 
     # ------------------------------------------------------------------
@@ -682,6 +722,11 @@ class MainWindow(QMainWindow):
             self.settings.value("timestamp", "true") == "true"
         )
         self.zoom.setValue(int(self.settings.value("zoom", 100)))
+        self.label_chk.setChecked(
+            self.settings.value("label_on", "false") == "true"
+        )
+        self.name_edit.setText(self.settings.value("label_name", ""))
+        self.order_edit.setText(self.settings.value("label_order", ""))
 
     def _save_ui_settings(self):
         if self._building:
@@ -698,6 +743,11 @@ class MainWindow(QMainWindow):
         a = self.audio_combo.currentData()
         if a is not None:
             self.settings.setValue("audio_device", a)
+        self.settings.setValue(
+            "label_on", "true" if self.label_chk.isChecked() else "false"
+        )
+        self.settings.setValue("label_name", self.name_edit.text())
+        self.settings.setValue("label_order", self.order_edit.text())
 
     # ------------------------------------------------------------------
     def closeEvent(self, ev):

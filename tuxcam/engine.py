@@ -227,6 +227,8 @@ class CameraEngine(QObject):
             "videobalance name=balance ! "
             'textoverlay name=ts text="" valignment=bottom halignment=right '
             'font-desc="Sans, 18" shaded-background=true ! '
+            'textoverlay name=meta text="" valignment=top halignment=left '
+            'font-desc="Sans, 18" shaded-background=true ! '
             "tee name=vtee allow-not-linked=true "
             "vtee. ! queue leaky=downstream max-size-buffers=3 ! videoconvert ! "
             "video/x-raw,format=RGB ! "
@@ -262,6 +264,7 @@ class CameraEngine(QObject):
                 asrc.set_property("device", audio_device)
 
         self._ts = self.pipeline.get_by_name("ts")
+        self._meta = self.pipeline.get_by_name("meta")
         self._crop = self.pipeline.get_by_name("crop")
         self._balance = self.pipeline.get_by_name("balance")
         self._vtee = self.pipeline.get_by_name("vtee")
@@ -298,7 +301,7 @@ class CameraEngine(QObject):
             self.pipeline = None
             # drop element refs so GC never disposes a PLAYING element
             self._appsink = self._rvsink = self._rasink = None
-            self._ts = self._crop = self._balance = None
+            self._ts = self._meta = self._crop = self._balance = None
             self._vtee = self._atee = None
             self._bus = None
         self._bus_timer.stop()
@@ -351,6 +354,13 @@ class CameraEngine(QObject):
     def set_balance(self, prop: str, value: float):
         if getattr(self, "_balance", None):
             self._balance.set_property(prop, value)
+
+    def set_label(self, name: str, order: str, on: bool):
+        if getattr(self, "_meta", None):
+            parts = [p for p in (name.strip(), order.strip()) if p]
+            self._meta.set_property(
+                "text", "\n".join(parts) if on and parts else ""
+            )
 
     def set_timestamp(self, on: bool):
         self.timestamp_on = on

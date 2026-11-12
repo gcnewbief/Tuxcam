@@ -9,6 +9,8 @@ filming return/unboxing inspections, but general-purpose.
 - One-click recording to **MP4** or **MKV** (H.264 + AAC audio)
 - **Timestamp overlay** burned into preview, recordings and snapshots —
   useful evidence for disputed returns
+- **Name + order-number label** (Label button → "Show on video") burned
+  in top-left; off by default, per-video toggle
 - Full-resolution **snapshots** (PNG)
 - Audio source picker + live level meter, or record video-only
 - Digital zoom (works mid-recording): **scroll wheel** zooms toward the
