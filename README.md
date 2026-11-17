@@ -6,7 +6,9 @@ for quickly filming return/unboxing inspections, but general-purpose.
 ## Features
 
 - Live preview with device + resolution/fps selection (raw and MJPG modes)
-- One-click recording to **MP4** or **MKV** (H.264 + AAC audio)
+- One-click recording to **MP4** or **MKV** (H.264 + AAC audio) —
+  hardware encoding via Media Foundation on Windows and VA-API on Linux
+  where available, x264 fallback
 - **Timestamp overlay** burned into preview, recordings and snapshots —
   useful evidence for disputed returns
 - **Name + order-number label** (Label button → "Show on video") burned

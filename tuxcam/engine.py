@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import sys
 import time
 from dataclasses import dataclass
 
@@ -36,6 +37,41 @@ from . import backend
 Gst.init(None)
 
 FPS_CANDIDATES = (60, 50, 30, 25, 24, 20, 15, 10, 5)
+
+
+def _venc_desc(kbps: int) -> str:
+    """H.264 encoder launch fragment, hardware first, x264 last resort.
+
+    ``bitrate`` (kbit/sec) exists on every encoder here. Vendor-specific
+    properties (gop-size, rc-mode…) are set opportunistically on the
+    element after parsing since they are conditionally available.
+    """
+    x264 = (
+        f"x264enc tune=zerolatency speed-preset=veryfast "
+        f"bitrate={kbps} key-int-max=60"
+    )
+    if sys.platform == "win32":
+        # mfh264enc wraps whatever hardware MFT the GPU driver provides
+        # (Intel QSV / NVENC / AMD AMF); Windows ships a software MFT
+        # as fallback so it is nearly always present.
+        candidates = (
+            f"mfh264enc bitrate={kbps}",
+            f"amfh264enc bitrate={kbps}",
+            x264,
+        )
+    elif os.path.isdir("/dev/dri"):
+        # va-api/va only work with a real drm render node
+        candidates = (
+            f"vaapih264enc bitrate={kbps}",
+            f"vah264enc bitrate={kbps}",
+            x264,
+        )
+    else:
+        candidates = (x264,)
+    for desc in candidates:
+        if Gst.ElementFactory.find(desc.split()[0]):
+            return desc
+    return x264
 
 
 @dataclass(frozen=True)
@@ -438,8 +474,7 @@ class CameraEngine(QObject):
         desc = (
             "appsrc name=vasrc is-live=true format=time do-timestamp=true "
             "block=false ! videoconvert ! "
-            f"x264enc tune=zerolatency speed-preset=veryfast bitrate={kbps} "
-            "key-int-max=60 ! h264parse ! rmux. "
+            f"{_venc_desc(kbps)} name=venc ! h264parse ! rmux. "
         )
         if with_audio:
             desc += (
@@ -460,6 +495,12 @@ class CameraEngine(QObject):
             self.error.emit(f"Could not build recorder: {e}")
             return
         rp.get_by_name("fsink").set_property("location", path)
+        venc = rp.get_by_name("venc")
+        # ~2 s keyframe interval, matching x264enc's key-int-max=60
+        for prop in ("gop-size", "keyframe-period", "intra-period"):
+            if venc.find_property(prop):
+                venc.set_property(prop, 60)
+                break
 
         self._rvsink = self.pipeline.get_by_name("rvsink")
         vasrc = rp.get_by_name("vasrc")

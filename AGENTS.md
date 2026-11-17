@@ -118,6 +118,12 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python tuxcam.py   # headless testing
   embedding a `C:\...` path in the launch string eats backslashes.
 - AAC encoder fallback chain: `avenc_aac` → `fdkaacenc` → `voaacenc`
   (fdk-aac isn't in Ubuntu repos, so avenc stays first for Linux).
+- H.264 encoder fallback chain (`_venc_desc`): Windows prefers
+  `mfh264enc` (hardware MFT — QSV/NVENC/AMF, whichever the driver
+  exposes) → `amfh264enc` → `x264enc`; Linux tries `vaapih264enc` →
+  `vah264enc` only when `/dev/dri` exists, else x264enc. Bitrate is
+  always kbit/sec; gop props are conditionally available per-vendor so
+  they're set via `find_property` after parsing.
 - `packaging/build_windows.sh` → PyInstaller onefile `dist/Tuxcam.exe`
   (~110 MB). The builtin `gi.repository.Gst` hook collects
   plugins/typelibs/deps itself — do NOT also bundle bin/ or lib/
