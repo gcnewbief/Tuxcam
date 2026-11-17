@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 
-from PySide6.QtCore import Qt, QSettings, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QSettings, QTimer, Signal, Slot, QUrl
 from PySide6.QtGui import QImage, QKeySequence, QPainter, QColor, QPen, QFont, QShortcut
+from PySide6.QtNetwork import (
+    QNetworkAccessManager,
+    QNetworkReply,
+    QNetworkRequest,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,6 +39,14 @@ from .engine import CameraEngine, list_devices
 
 ORG = "Tuxcam"
 APP = "Tuxcam"
+
+RELEASE_API = "https://api.github.com/repos/gcnewbief/Tuxcam/releases/latest"
+RELEASES_PAGE = "https://github.com/gcnewbief/Tuxcam/releases"
+
+
+def _ver_tuple(s: str) -> tuple:
+    nums = [int(x) for x in re.findall(r"\d+", s)[:3]]
+    return tuple(nums + [0] * (3 - len(nums)))
 
 
 class VideoView(QWidget):
@@ -274,8 +288,13 @@ class MainWindow(QMainWindow):
         # ---- status bar ---------------------------------------------------
         self.status_label = QLabel("Ready")
         self.statusBar().addWidget(self.status_label, stretch=1)
+        self.update_label = QLabel()
+        self.update_label.setOpenExternalLinks(True)
+        self.update_label.setVisible(False)
+        self.statusBar().addPermanentWidget(self.update_label)
         self.rec_label = QLabel("")
         self.statusBar().addPermanentWidget(self.rec_label)
+        self._enc_label = ""
 
         # ---- shortcuts ----------------------------------------------------
         for key, slot in (
@@ -330,6 +349,7 @@ class MainWindow(QMainWindow):
 
         self._load_ui_settings()
         self.refresh_devices()
+        QTimer.singleShot(2500, self._check_updates)
 
     # ------------------------------------------------------------------
     def _zoom_changed(self, v):
@@ -623,8 +643,9 @@ class MainWindow(QMainWindow):
         else:
             self.status_label.setText("Snapshot failed")
 
-    def _on_rec_started(self):
+    def _on_rec_started(self, enc_label=""):
         self.video.recording = True
+        self._enc_label = enc_label
         self.rec_btn.setText("■  Stop")
         self.rec_btn.setStyleSheet("font-weight: bold; color: #d21e1e;")
         for w in (
@@ -653,17 +674,48 @@ class MainWindow(QMainWindow):
         ):
             w.setEnabled(True)
         self.rec_label.setText("")
+        self._enc_label = ""
         self.status_label.setText(f"Saved {path}")
 
     def _on_rec_stats(self, secs, size):
         m, s = divmod(int(secs), 60)
         h, m = divmod(m, 60)
         mb = size / 1_000_000
-        self.rec_label.setText(f"  ● {h:02d}:{m:02d}:{s:02d}   {mb:.1f} MB")
+        enc = f"   {self._enc_label}" if self._enc_label else ""
+        self.rec_label.setText(
+            f"  ● {h:02d}:{m:02d}:{s:02d}   {mb:.1f} MB{enc}")
         self.video.update()
 
     def _on_error(self, msg):
         self.status_label.setText(msg)
+
+    # ------------------------------------------------------------------
+    # update check
+    # ------------------------------------------------------------------
+
+    def _check_updates(self):
+        """One-shot GitHub releases check; silent on any failure."""
+        self._nam = QNetworkAccessManager(self)
+        req = QNetworkRequest(QUrl(RELEASE_API))
+        req.setRawHeader(b"User-Agent", f"Tuxcam/{__version__}".encode())
+        req.setRawHeader(b"Accept", b"application/vnd.github+json")
+        reply = self._nam.get(req)
+        reply.finished.connect(lambda: self._on_update_reply(reply))
+
+    def _on_update_reply(self, reply):
+        reply.deleteLater()
+        if reply.error() != QNetworkReply.NoError:
+            return
+        try:
+            data = json.loads(bytes(reply.readAll().data()).decode("utf-8"))
+        except Exception:
+            return
+        tag = str(data.get("tag_name", ""))
+        if tag and _ver_tuple(tag) > _ver_tuple(__version__):
+            url = str(data.get("html_url") or RELEASES_PAGE)
+            self.update_label.setText(
+                f'  <a href="{url}">New version {tag} available</a>')
+            self.update_label.setVisible(True)
 
     # ------------------------------------------------------------------
     # misc ui

@@ -74,6 +74,22 @@ def _venc_desc(kbps: int) -> str:
     return x264
 
 
+def _encoder_label(venc: Gst.Element) -> str:
+    """Human label for the picked video encoder.
+
+    ``mfh264enc`` can wrap either a vendor hardware MFT or Microsoft's
+    software MFT — the factory long-name carries the vendor, so the
+    "GPU" tag is only added when a vendor string is actually present.
+    """
+    name = venc.get_factory().get_name()
+    long_name = (venc.get_factory().get_metadata("long-name") or "").lower()
+    if name == "x264enc":
+        return "x264enc (CPU)"
+    hw = ("intel", "amd", "nvidia", "quick sync", "nvenc", "amf",
+          "va-api", "vaapi", "qsv", "vce")
+    return f"{name} (GPU)" if any(k in long_name for k in hw) else name
+
+
 @dataclass(frozen=True)
 class Mode:
     width: int
@@ -212,7 +228,7 @@ class CameraEngine(QObject):
     frame_ready = Signal(QImage)
     level_changed = Signal(float)  # 0.0 - 1.0
     error = Signal(str)
-    recording_started = Signal()
+    recording_started = Signal(str)  # video encoder label, e.g. "mfh264enc (GPU)"
     recording_finished = Signal(str)  # saved file path
     rec_stats = Signal(float, int)  # elapsed seconds, file bytes
 
@@ -527,7 +543,7 @@ class CameraEngine(QObject):
         self._rec_t0 = time.monotonic()
         self._pump_timer.start()
         self._stats_timer.start()
-        self.recording_started.emit()
+        self.recording_started.emit(_encoder_label(venc))
 
     def _pump_recording(self):
         rec = self._rec
